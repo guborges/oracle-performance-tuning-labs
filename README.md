@@ -47,7 +47,7 @@ Este repositório contém **6 laboratórios progressivos** de Performance Tuning
 
 ### Software Necessário
 
-- **Oracle Database** 12c ou superior (testado em 23ai/26ai)
+- **Oracle Database** 12c ou superior (testado em 19c/23ai/26ai)
 - **SQL*Plus** ou **SQLcl**
 - **Oracle Sample Schemas** (SH - Sales History)
 
