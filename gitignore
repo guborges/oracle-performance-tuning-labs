@@ -1,0 +1,54 @@
+# Oracle SQL Developer
+*.jpr
+*.jws
+*.class
+
+# SQL*Plus
+*.log
+*.lst
+*.trc
+
+# Logs de execução
+tuning_labs_logs/
+*.log
+
+# Arquivos temporários
+*.tmp
+*.bak
+*.swp
+*~
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Arquivos de configuração local
+config.local.sql
+*.local.sql
+
+# Dados sensíveis
+passwords.txt
+credentials.sql
+wallet/
+
+# Output de testes
+test_output/
+temp/
+
+# Arquivos de estatísticas
+awrrpt_*.html
+addmrpt_*.txt
+
+# SQL*Loader
+*.bad
+*.dis
+
+# Export/Import
+*.dmp
+*.dmp.log
