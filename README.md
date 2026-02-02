@@ -465,8 +465,8 @@ Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para ma
 ## 👨‍💻 Autor
 
 **Seu Nome**
-- GitHub: [@seu_usuario](https://github.com/seu_usuario)
-- LinkedIn: [Seu Perfil](https://linkedin.com/in/seu_perfil)
+- GitHub: [@guborges](https://github.com/guborges)
+- LinkedIn: [Seu Perfil]([https://linkedin.com/in/seu_perfil](https://www.linkedin.com/in/gustavobevangelista/))
 
 ---
 
