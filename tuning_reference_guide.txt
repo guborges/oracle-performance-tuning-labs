@@ -1,0 +1,374 @@
+================================================================================
+                    ORACLE PERFORMANCE TUNING - GUIA DE REFERÊNCIA
+================================================================================
+
+Este guia contém comandos e dicas essenciais para análise de performance.
+
+================================================================================
+1. ANALISANDO EXECUTION PLANS
+================================================================================
+
+-- Ver plano de execução de uma query já executada
+SELECT sql_id, child_number, sql_text 
+FROM v$sql 
+WHERE sql_text LIKE '%sua_query_hint%'
+  AND sql_text NOT LIKE '%v$sql%';
+
+SELECT * FROM TABLE(
+  dbms_xplan.display_cursor('&sql_id', &child_number, 'ADVANCED ALLSTATS LAST')
+);
+
+-- Ver plano estimado (sem executar)
+EXPLAIN PLAN FOR
+SELECT ...;
+
+SELECT * FROM TABLE(dbms_xplan.display);
+
+-- Colunas importantes no plano:
+-- E-Rows = Estimated Rows (estimativa do Oracle)
+-- A-Rows = Actual Rows (linhas reais processadas)
+-- Buffers = Logical reads (leituras de blocos)
+-- A-Time = Actual Time (tempo real)
+
+================================================================================
+2. ACCESS PATHS (Métodos de Acesso)
+================================================================================
+
+FULL TABLE SCAN
+  - Lê toda a tabela sequencialmente
+  - Bom para: grandes volumes de dados (>5-10% da tabela)
+  - Dica: Use PARALLEL para acelerar
+
+INDEX RANGE SCAN
+  - Lê parte do índice
+  - Bom para: seletividade alta (poucos registros)
+  - Requer: WHERE com coluna indexada
+
+INDEX FAST FULL SCAN
+  - Lê todo o índice (mais rápido que FULL TABLE SCAN)
+  - Bom para: COUNT(*), quando índice cobre todas as colunas
+
+INDEX SKIP SCAN
+  - Pula a primeira coluna de índice composto
+  - Bom para: quando não filtra pela primeira coluna
+  - Menos eficiente que RANGE SCAN
+
+INDEX FULL SCAN
+  - Lê índice em ordem
+  - Bom para: ORDER BY pela mesma coluna do índice
+
+================================================================================
+3. JOIN METHODS
+================================================================================
+
+NESTED LOOP JOIN
+  - Loop externo × loop interno
+  - Bom para: POUCOS registros + índice na tabela interna
+  - Exemplo: 100 clientes × suas vendas
+  - Hint: /*+ USE_NL(t1 t2) LEADING(t1 t2) */
+
+HASH JOIN
+  - Cria tabela hash na memória
+  - Bom para: MUITOS registros, full scans
+  - Exemplo: Todas vendas × todos produtos
+  - Hint: /*+ USE_HASH(t1 t2) */
+
+MERGE JOIN
+  - Ordena ambas as tabelas e faz merge
+  - Bom para: Tabelas já ordenadas
+  - Menos comum hoje em dia
+  - Hint: /*+ USE_MERGE(t1 t2) */
+
+SEMI JOIN (EXISTS, IN)
+  - Retorna apenas se existe match
+  - Para: WHERE EXISTS, WHERE IN
+
+ANTI JOIN (NOT EXISTS, NOT IN)
+  - Retorna apenas se NÃO existe match
+  - Para: WHERE NOT EXISTS, WHERE NOT IN
+  - CUIDADO: NOT IN com NULLs!
+
+================================================================================
+4. ÍNDICES - ESTRATÉGIAS
+================================================================================
+
+Quando criar índice:
+✓ Coluna em WHERE com alta seletividade
+✓ Coluna em JOIN
+✓ Coluna em ORDER BY (se muito usado)
+✗ Tabelas pequenas (<1000 linhas)
+✗ Colunas com poucos valores distintos (ex: SEXO)
+✗ Tabelas com muitos INSERTs (índice desacelera)
+
+Índice composto (múltiplas colunas):
+- Ordem importa! Coluna mais seletiva PRIMEIRO
+- Exemplo: INDEX(country_id, city, cust_id)
+- Usa para: WHERE country_id = X AND city = Y
+
+Covering Index:
+- Índice contém TODAS as colunas da query
+- Não precisa acessar a tabela (mais rápido!)
+- Exemplo: INDEX(cust_id, prod_id, amount_sold)
+
+Function-Based Index:
+- Indexa resultado de função
+- Exemplo: INDEX(UPPER(name)), INDEX(TRUNC(date))
+- Use para: WHERE UPPER(name) = 'JOÃO'
+
+Comandos úteis:
+-- Criar índice
+CREATE INDEX idx_name ON table(col1, col2);
+
+-- Reconstruir índice
+ALTER INDEX idx_name REBUILD;
+
+-- Coletar estatísticas do índice
+EXEC DBMS_STATS.GATHER_INDEX_STATS('SCHEMA', 'INDEX_NAME');
+
+-- Ver índices da tabela
+SELECT index_name, column_name, column_position
+FROM user_ind_columns
+WHERE table_name = 'SALES'
+ORDER BY index_name, column_position;
+
+-- Ver estatísticas de índice
+SELECT index_name, blevel, leaf_blocks, distinct_keys, clustering_factor
+FROM user_indexes
+WHERE table_name = 'SALES';
+
+================================================================================
+5. SUBQUERIES - BOAS PRÁTICAS
+================================================================================
+
+❌ EVITE: Subquery correlacionada no SELECT
+SELECT c.name,
+       (SELECT COUNT(*) FROM sales WHERE cust_id = c.cust_id)  -- LENTO!
+FROM customers c;
+
+✅ USE: JOIN
+SELECT c.name, COUNT(*)
+FROM customers c
+LEFT JOIN sales s ON s.cust_id = c.cust_id
+GROUP BY c.name;
+
+❌ EVITE: NOT IN com possível NULL
+WHERE cust_id NOT IN (SELECT cust_id FROM sales)  -- Pode dar errado!
+
+✅ USE: NOT EXISTS
+WHERE NOT EXISTS (SELECT 1 FROM sales WHERE cust_id = c.cust_id)
+
+✅ OU: NOT IN com filtro de NULL
+WHERE cust_id NOT IN (SELECT cust_id FROM sales WHERE cust_id IS NOT NULL)
+
+================================================================================
+6. GROUP BY - OTIMIZAÇÃO
+================================================================================
+
+HASH GROUP BY (padrão)
+  - Usa hash table na memória
+  - Mais rápido para grandes volumes
+  - Não retorna ordenado
+
+SORT GROUP BY
+  - Ordena dados primeiro
+  - Útil quando precisa ORDER BY mesma coluna
+  - Hint: /*+ NO_USE_HASH_AGGREGATION */
+
+WHERE vs HAVING:
+❌ Ruim:
+SELECT cust_id, SUM(amount)
+FROM sales
+GROUP BY cust_id
+HAVING cust_id = 100;  -- Filtra DEPOIS da agregação
+
+✅ Bom:
+SELECT cust_id, SUM(amount)
+FROM sales
+WHERE cust_id = 100  -- Filtra ANTES da agregação
+GROUP BY cust_id;
+
+Window Functions (evita múltiplas varreduras):
+✅ Uma varredura:
+SELECT prod_id,
+       SUM(amount) as total,
+       SUM(SUM(amount)) OVER () as grand_total,
+       RATIO_TO_REPORT(SUM(amount)) OVER () as percentual
+FROM sales
+GROUP BY prod_id;
+
+Parallel Query:
+SELECT /*+ PARALLEL(4) */ prod_id, COUNT(*)
+FROM sales
+GROUP BY prod_id;
+
+================================================================================
+7. ESTATÍSTICAS
+================================================================================
+
+Coletar estatísticas (tabela):
+EXEC DBMS_STATS.GATHER_TABLE_STATS(
+  ownname => 'SH',
+  tabname => 'SALES',
+  estimate_percent => DBMS_STATS.AUTO_SAMPLE_SIZE,
+  method_opt => 'FOR ALL COLUMNS SIZE AUTO',  -- Cria histogramas se necessário
+  cascade => TRUE  -- Inclui índices
+);
+
+Coletar estatísticas (schema inteiro):
+EXEC DBMS_STATS.GATHER_SCHEMA_STATS(
+  ownname => 'SH',
+  estimate_percent => DBMS_STATS.AUTO_SAMPLE_SIZE,
+  cascade => TRUE
+);
+
+Verificar estatísticas:
+-- Quando foi coletada
+SELECT table_name, num_rows, blocks, last_analyzed
+FROM user_tables
+ORDER BY last_analyzed DESC;
+
+-- Estatísticas desatualizadas
+SELECT table_name, stale_stats
+FROM user_tab_statistics
+WHERE stale_stats = 'YES';
+
+-- Histogramas existentes
+SELECT table_name, column_name, histogram, num_buckets
+FROM user_tab_col_statistics
+WHERE histogram <> 'NONE'
+ORDER BY table_name, column_name;
+
+Deletar estatísticas:
+EXEC DBMS_STATS.DELETE_TABLE_STATS('SH', 'SALES');
+
+================================================================================
+8. HINTS ÚTEIS
+================================================================================
+
+-- Forçar uso de índice
+/*+ INDEX(t idx_name) */
+
+-- Forçar full table scan
+/*+ FULL(t) */
+
+-- Forçar método de JOIN
+/*+ USE_NL(t1 t2) */      -- Nested Loop
+/*+ USE_HASH(t1 t2) */    -- Hash Join
+/*+ USE_MERGE(t1 t2) */   -- Merge Join
+
+-- Ordem do JOIN
+/*+ LEADING(t1 t2 t3) */
+
+-- Parallel query
+/*+ PARALLEL(4) */
+/*+ PARALLEL(t 4) */
+
+-- Forçar primeira linha rápido
+/*+ FIRST_ROWS(10) */
+
+-- Otimizar para throughput
+/*+ ALL_ROWS */
+
+-- Combinar hints
+/*+ USE_NL(s c) LEADING(c s) INDEX(c idx_country) */
+
+================================================================================
+9. COMANDOS DE DIAGNÓSTICO
+================================================================================
+
+-- Queries lentas em execução
+SELECT sql_id, elapsed_time/1000000 as elapsed_sec, cpu_time/1000000 as cpu_sec,
+       sql_text
+FROM v$sql
+WHERE elapsed_time > 5000000  -- >5 segundos
+ORDER BY elapsed_time DESC;
+
+-- Top SQLs por Logical Reads
+SELECT sql_id, executions, buffer_gets, buffer_gets/executions as reads_per_exec,
+       SUBSTR(sql_text, 1, 100) as sql_text
+FROM v$sql
+WHERE executions > 0
+ORDER BY buffer_gets DESC
+FETCH FIRST 10 ROWS ONLY;
+
+-- Queries com estimativas ruins
+SELECT sql_id, child_number,
+       cardinality as estimated_rows,
+       executions
+FROM v$sql_plan
+WHERE cardinality > 0
+  AND operation = 'TABLE ACCESS'
+ORDER BY cardinality DESC
+FETCH FIRST 20 ROWS ONLY;
+
+-- Sessions ativas
+SELECT sid, serial#, username, status, sql_id, event, wait_time, seconds_in_wait
+FROM v$session
+WHERE status = 'ACTIVE'
+  AND username IS NOT NULL;
+
+-- Locks
+SELECT s.sid, s.serial#, s.username, o.object_name, l.locked_mode
+FROM v$locked_object l
+JOIN v$session s ON l.session_id = s.sid
+JOIN dba_objects o ON l.object_id = o.object_id;
+
+================================================================================
+10. CHECKLIST DE TUNING
+================================================================================
+
+□ 1. Identifique a query lenta
+     - AWR Report, v$sql, SQL Monitor
+
+□ 2. Obtenha o plano de execução
+     - DBMS_XPLAN.DISPLAY_CURSOR
+
+□ 3. Analise o plano
+     - E-Rows vs A-Rows (cardinality)
+     - Access paths (FULL vs INDEX)
+     - Join methods
+     - Buffers (logical reads)
+
+□ 4. Verifique estatísticas
+     - Atualizadas? (last_analyzed)
+     - Histogramas? (data skew)
+
+□ 5. Considere índices
+     - Colunas em WHERE, JOIN, ORDER BY
+     - Índice cobre query? (covering index)
+
+□ 6. Otimize a query
+     - Reescreva subqueries
+     - WHERE vs HAVING
+     - Elimine colunas desnecessárias
+
+□ 7. Teste com hints
+     - Forçar índice, join method, etc.
+     - Compare resultados
+
+□ 8. Monitore em produção
+     - AWR Report
+     - SQL Monitor
+
+================================================================================
+11. RESOURCES ADICIONAIS
+================================================================================
+
+Documentação Oracle:
+- Database Performance Tuning Guide
+- SQL Tuning Guide
+- DBMS_XPLAN Package
+
+Ferramentas:
+- SQL Developer (Autotrace, Explain Plan)
+- Enterprise Manager
+- AWR Reports
+- SQL Monitor (Real-Time SQL Monitoring)
+
+Scripts úteis:
+- $ORACLE_HOME/rdbms/admin/awrrpt.sql  (AWR Report)
+- $ORACLE_HOME/rdbms/admin/addmrpt.sql (ADDM Report)
+
+================================================================================
+FIM DO GUIA DE REFERÊNCIA
+================================================================================
